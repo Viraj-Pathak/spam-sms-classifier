@@ -3,6 +3,7 @@ import urllib.request
 import zipfile
 import re
 
+import joblib
 import numpy as np
 import pandas as pd
 import nltk
@@ -28,8 +29,10 @@ nltk.download("punkt", quiet=True)
 nltk.download("punkt_tab", quiet=True)
 nltk.download("stopwords", quiet=True)
 
-DATA_DIR = "data"
-DATA_FILE = os.path.join(DATA_DIR, "SMSSpamCollection")
+DATA_DIR   = "data"
+DATA_FILE  = os.path.join(DATA_DIR, "SMSSpamCollection")
+MODELS_DIR = "models"
+CACHE_FILE = os.path.join(MODELS_DIR, "trained_bundle.joblib")
 DATASET_URL = (
     "https://archive.ics.uci.edu/ml/machine-learning-databases"
     "/00228/smsspamcollection.zip"
@@ -58,49 +61,58 @@ def preprocess(text: str) -> str:
     return " ".join(tokens)
 
 
-@st.cache_resource(show_spinner="Training models on SMS Spam Collection…")
+@st.cache_resource(show_spinner="Loading models…")
 def load_models():
-    download_dataset()
-    df = pd.read_csv(
-        DATA_FILE, sep="\t", header=None,
-        names=["label", "message"], encoding="latin-1",
-    )
-    df["cleaned"] = df["message"].apply(preprocess)
-    df["label_enc"] = (df["label"] == "spam").astype(int)
+    # Return cached bundle from disk if available
+    if os.path.exists(CACHE_FILE):
+        return joblib.load(CACHE_FILE)
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        df["cleaned"], df["label_enc"],
-        test_size=0.2, random_state=42, stratify=df["label_enc"],
-    )
+    # Otherwise train and save
+    with st.spinner("First run — training models (saves to disk for next time)…"):
+        download_dataset()
+        df = pd.read_csv(
+            DATA_FILE, sep="\t", header=None,
+            names=["label", "message"], encoding="latin-1",
+        )
+        df["cleaned"] = df["message"].apply(preprocess)
+        df["label_enc"] = (df["label"] == "spam").astype(int)
 
-    vectorizer = TfidfVectorizer(max_features=5000)
-    X_train_tfidf = vectorizer.fit_transform(X_train)
-    X_test_tfidf  = vectorizer.transform(X_test)
+        X_train, X_test, y_train, y_test = train_test_split(
+            df["cleaned"], df["label_enc"],
+            test_size=0.2, random_state=42, stratify=df["label_enc"],
+        )
 
-    model_defs = {
-        "Naive Bayes":         MultinomialNB(),
-        "Logistic Regression": LogisticRegression(max_iter=1000, random_state=42),
-        "LinearSVC":           LinearSVC(max_iter=1000, random_state=42),
-    }
+        vectorizer = TfidfVectorizer(max_features=5000)
+        X_train_tfidf = vectorizer.fit_transform(X_train)
+        X_test_tfidf  = vectorizer.transform(X_test)
 
-    trained, metrics = {}, {}
-    for name, m in model_defs.items():
-        m.fit(X_train_tfidf, y_train)
-        y_pred = m.predict(X_test_tfidf)
-        if hasattr(m, "predict_proba"):
-            y_scores = m.predict_proba(X_test_tfidf)[:, 1]
-        else:
-            y_scores = m.decision_function(X_test_tfidf)
-        trained[name] = m
-        metrics[name] = {
-            "accuracy":  accuracy_score(y_test, y_pred),
-            "precision": precision_score(y_test, y_pred),
-            "recall":    recall_score(y_test, y_pred),
-            "f1":        f1_score(y_test, y_pred),
-            "cm":        confusion_matrix(y_test, y_pred),
-            "report":    classification_report(y_test, y_pred, target_names=["ham", "spam"]),
-            "pr_curve":  precision_recall_curve(y_test, y_scores),
+        model_defs = {
+            "Naive Bayes":         MultinomialNB(),
+            "Logistic Regression": LogisticRegression(max_iter=1000, random_state=42),
+            "LinearSVC":           LinearSVC(max_iter=1000, random_state=42),
         }
+
+        trained, metrics = {}, {}
+        for name, m in model_defs.items():
+            m.fit(X_train_tfidf, y_train)
+            y_pred = m.predict(X_test_tfidf)
+            if hasattr(m, "predict_proba"):
+                y_scores = m.predict_proba(X_test_tfidf)[:, 1]
+            else:
+                y_scores = m.decision_function(X_test_tfidf)
+            trained[name] = m
+            metrics[name] = {
+                "accuracy":  accuracy_score(y_test, y_pred),
+                "precision": precision_score(y_test, y_pred),
+                "recall":    recall_score(y_test, y_pred),
+                "f1":        f1_score(y_test, y_pred),
+                "cm":        confusion_matrix(y_test, y_pred),
+                "report":    classification_report(y_test, y_pred, target_names=["ham", "spam"]),
+                "pr_curve":  precision_recall_curve(y_test, y_scores),
+            }
+
+        os.makedirs(MODELS_DIR, exist_ok=True)
+        joblib.dump((trained, vectorizer, metrics, df), CACHE_FILE)
 
     return trained, vectorizer, metrics, df
 
