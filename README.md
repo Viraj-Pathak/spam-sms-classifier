@@ -4,7 +4,7 @@ A machine learning web app that detects spam SMS messages using TF-IDF features 
 
 ## Live Demo
 
-> Deploy link will appear here after Streamlit Cloud deployment.
+**[https://spam-sms-classifier-afbcxcejp7c4ybuzmdotwk.streamlit.app](https://spam-sms-classifier-afbcxcejp7c4ybuzmdotwk.streamlit.app)**
 
 ## Features
 
